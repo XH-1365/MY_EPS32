@@ -1,32 +1,49 @@
 #include <Arduino.h>
-#include <Wire.h>
 
 /* ========= 电机引脚 ========= */
 #define AIN1 25
 #define AIN2 26
 #define PWM_PIN 27
 
-int pwm_value = 180;
+/* ========= 霍尔 ========= */
+#define HALL_PIN 34
 
-/* ========= MPU6050 地址 ========= */
-#define MPU_ADDR 0x68
+/* ========= PWM ========= */
+#define PWM_CHANNEL 0
+#define PWM_FREQ 1000
+#define PWM_RESOLUTION 8
 
-void motorLeft() {
-    digitalWrite(AIN1, LOW);
-    digitalWrite(AIN2, HIGH);
-    analogWrite(PWM_PIN, pwm_value);
+/* ========= 参数 ========= */
+float pulse_per_mm = 273.0;   // ★ 可自己调
+
+volatile long pulse_count = 0;
+long target_pulse = 0;
+
+int motor_speed = 180;
+int motor_direction = 1;  // 1 正方向  -1 反方向
+
+/* ========= 霍尔中断 ========= */
+void IRAM_ATTR hallISR() {
+    pulse_count++;
 }
 
-void motorRight() {
+/* ========= 电机控制 ========= */
+void motorForward() {
     digitalWrite(AIN1, HIGH);
     digitalWrite(AIN2, LOW);
-    analogWrite(PWM_PIN, pwm_value);
+    ledcWrite(PWM_CHANNEL, motor_speed);
+}
+
+void motorBackward() {
+    digitalWrite(AIN1, LOW);
+    digitalWrite(AIN2, HIGH);
+    ledcWrite(PWM_CHANNEL, motor_speed);
 }
 
 void motorStop() {
     digitalWrite(AIN1, LOW);
     digitalWrite(AIN2, LOW);
-    analogWrite(PWM_PIN, 0);
+    ledcWrite(PWM_CHANNEL, 0);
 }
 
 void setup() {
@@ -34,44 +51,47 @@ void setup() {
 
     pinMode(AIN1, OUTPUT);
     pinMode(AIN2, OUTPUT);
-    pinMode(PWM_PIN, OUTPUT);
 
-    Wire.begin(21, 22);
+    pinMode(HALL_PIN, INPUT_PULLUP);
+    attachInterrupt(digitalPinToInterrupt(HALL_PIN), hallISR, RISING);
 
-    // 唤醒 MPU6050
-    Wire.beginTransmission(MPU_ADDR);
-    Wire.write(0x6B);
-    Wire.write(0);
-    Wire.endTransmission(true);
+    ledcSetup(PWM_CHANNEL, PWM_FREQ, PWM_RESOLUTION);
+    ledcAttachPin(PWM_PIN, PWM_CHANNEL);
 
-    Serial.println("MPU6050 Ready");
+    Serial.println("输入移动距离 (mm)，可输入负数：");
 }
 
 void loop() {
 
-    Wire.beginTransmission(MPU_ADDR);
-    Wire.write(0x3B);
-    Wire.endTransmission(false);
-    Wire.requestFrom(MPU_ADDR, 6, true);
+    /* ===== 串口输入 ===== */
+    if (Serial.available()) {
 
-    int16_t ax = Wire.read() << 8 | Wire.read();
-    int16_t ay = Wire.read() << 8 | Wire.read();
-    int16_t az = Wire.read() << 8 | Wire.read();
+        float distance = Serial.parseFloat();  
 
-    float accX = ax / 16384.0;
+        if (distance == 0) return;
 
-    Serial.println(accX);
+        pulse_count = 0;
 
-    if (accX > 0.3) {
-        motorRight();
+        target_pulse = abs(distance) * pulse_per_mm;
+
+        if (distance > 0) {
+            motor_direction = 1;
+            motorForward();
+            Serial.println("正方向移动");
+        } else {
+            motor_direction = -1;
+            motorBackward();
+            Serial.println("反方向移动");
+        }
+
+        Serial.print("目标脉冲: ");
+        Serial.println(target_pulse);
     }
-    else if (accX < -0.3) {
-        motorLeft();
-    }
-    else {
+
+    /* ===== 到达目标停止 ===== */
+    if (target_pulse > 0 && pulse_count >= target_pulse) {
         motorStop();
+        Serial.println("到达目标位置");
+        target_pulse = 0;
     }
-
-    delay(50);
 }
-

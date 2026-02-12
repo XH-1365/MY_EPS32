@@ -1,9 +1,0 @@
-menu "MYLIBC"
-
-config MYLIBC_ENABLE
-    bool "Enable mylibc"
-    default "y"
-    help
-        For mylibc.
-
-endmenu
